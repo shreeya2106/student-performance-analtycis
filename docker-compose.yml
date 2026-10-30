@@ -1,0 +1,89 @@
+services:
+  # -------------------------------------------------------------
+  # TIER 1: Redis In-Memory Cache
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: edutrack-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - edutrack-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------
+  # TIER 2: Python Flask WSGI Backend
+  # -------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: edutrack-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - APP_ENV=docker-compose
+      - PORT=5000
+      - DATABASE_PATH=/data/edutrack.db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SECRET_KEY=${SECRET_KEY:-edutrack-dev-secret-key-2026}
+    volumes:
+      - edutrack-data:/data
+    networks:
+      - edutrack-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # -------------------------------------------------------------
+  # TIER 3: React Single Page Application (Served via Nginx)
+  # -------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: edutrack-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+      - "8080:80"
+    environment:
+      - BACKEND_HOST=backend:5000
+    networks:
+      - edutrack-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  edutrack-network:
+    name: edutrack-network
+    driver: bridge
+
+volumes:
+  edutrack-data:
+    name: edutrack-sqlite-data
+  redis-data:
+    name: edutrack-redis-data
